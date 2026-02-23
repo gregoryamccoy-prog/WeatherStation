@@ -1,6 +1,6 @@
 # ESP32 Weather Station
 
-A low-power indoor/outdoor weather station built on the ESP32 WROOM. It reads indoor conditions from a DHT11 sensor, fetches outdoor weather and a 3-day forecast from the Open-Meteo API, and renders the full layout onto a Waveshare 4.2" e-paper display. The device wakes every 10 minutes, completes its update cycle in under 15 seconds, then returns to deep sleep.
+A low-power indoor/outdoor weather station built on the ESP32 WROOM. It reads indoor conditions from a DHT11 sensor, fetches outdoor weather and a 3-day forecast from the [Open-Meteo](https://open-meteo.com/) API (no API key required), and renders the full layout onto a Waveshare 4.2" e-paper display. The device wakes every 10 minutes, completes its update cycle in under 15 seconds, then returns to deep sleep.
 
 ---
 
@@ -16,6 +16,7 @@ A low-power indoor/outdoor weather station built on the ESP32 WROOM. It reads in
 8. [Display Layout](#display-layout)
 9. [Project Structure](#project-structure)
 10. [Performance Targets](#performance-targets)
+11. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -143,12 +144,12 @@ Managed automatically by PlatformIO via `platformio.ini`:
 
 | Library | Version | Purpose |
 |---------|---------|---------|
-| `zinggjm/GxEPD2` | ^1.6.0 | e-Paper driver |
-| `bblanchon/ArduinoJson` | ^7.0.0 | JSON parsing |
+| `zinggjm/GxEPD2` | ^1.6.0 | e-Paper driver (GxEPD2_420 / GDEW042T2) |
+| `bblanchon/ArduinoJson` | ^7.0.0 | JSON parsing (v7 `JsonDocument`) |
 | `adafruit/DHT sensor library` | ^1.4.6 | DHT11 driver |
 | `adafruit/Adafruit Unified Sensor` | ^1.1.14 | Sensor abstraction |
 | `HTTPClient` | (bundled) | HTTP requests |
-| `WiFiClientSecure` | (bundled) | HTTPS |
+| `WiFiClientSecure` | (bundled) | HTTPS (TLS with `setInsecure()`) |
 | `Preferences` | (bundled) | NVS storage |
 
 ---
@@ -157,7 +158,7 @@ Managed automatically by PlatformIO via `platformio.ini`:
 
 ### Wi-Fi Credentials — `secrets.h`
 
-Create `secrets.h` in the **project root** (it is excluded from version control):
+Create `secrets.h` in the **project root** (it is excluded from version control via `.gitignore`):
 
 ```cpp
 // secrets.h
@@ -180,6 +181,8 @@ static constexpr char   LOCATION_NAME[] = "Crestwood, KY";
 static constexpr long GMT_OFFSET_SEC  = -18000;   // UTC-5 (EST)
 static constexpr int  DAYLIGHT_OFFSET = 3600;      // +1 h during EDT
 ```
+
+> **Remember** to also update the latitude/longitude in `OPENMETEO_URL` inside `config.h` to match.
 
 ### Sleep Interval — `src/config.h`
 
@@ -204,6 +207,8 @@ pio device monitor --baud 115200
 
 Or use the **PlatformIO: Build / Upload** buttons in VS Code.
 
+> **Stack size:** The Arduino loop task stack is set to **16 KB** (`-DARDUINO_LOOP_STACK_SIZE=16384` in `platformio.ini`) to accommodate GxEPD2 page-buffered rendering alongside the `WeatherSnapshot` struct and font rendering.
+
 ---
 
 ## Operation
@@ -214,28 +219,25 @@ Or use the **PlatformIO: Build / Upload** buttons in VS Code.
 Power-on / RTC wakeup
         │
         ▼
-  Connect Wi-Fi  ──(fail)──► use cached data
+  Init e-paper hardware (before Wi-Fi to avoid heap fragmentation)
         │
         ▼
-  NTP sync (once per day)
+  Connect Wi-Fi  ──(fail)──► render cached data → deep sleep
         │
         ▼
-  Read DHT11 (3 retries)
+  NTP sync (once per calendar day)
         │
         ▼
-  GET Open-Meteo API
+  Read DHT11 (up to 3 retries, 2 s apart)
         │
         ▼
-  Parse JSON (8 KB heap buffer)
+  HTTPS GET Open-Meteo API → getString() → deserializeJson()
         │
         ▼
-  Write NVS trend record (once per day)
+  Write NVS trend record (once per calendar day, if sensor + API both OK)
         │
         ▼
-  Render framebuffer
-        │
-        ▼
-  Full e-paper refresh
+  Render framebuffer → full e-paper refresh
         │
         ▼
   Deep sleep 10 min
@@ -244,44 +246,94 @@ Power-on / RTC wakeup
 ### Offline Behaviour
 
 If the Wi-Fi connection or API call fails, the device will:
-- Display the last successfully fetched weather data
-- Show an offline warning icon
+- Display the last successfully fetched weather data (cached in RTC memory)
+- Show "! Offline – cached data" warning and "Offline" in the top bar
 - Still display live indoor sensor readings
 - Continue the normal sleep / wake cycle
 
+### RTC-Retained State
+
+Across deep-sleep cycles, the following are preserved in RTC memory:
+- Last successful `CurrentConditions` and `ForecastDay[3]`
+- Timestamp of last successful API call
+- Day-of-year of last NTP sync and last NVS trend write
+- Wake counter
+
 ### NVS Trend Storage
 
-Up to **365 daily records** are stored in NVS flash using a circular buffer. Each record contains:
+Up to **365 daily records** are stored in NVS flash using a circular buffer. Each record (18 bytes) contains:
 - Day index (days since epoch)
 - Indoor temperature & humidity
 - Outdoor temperature
-- Pressure
+- Barometric pressure
 
-The 30 most recent records are rendered as a line graph on the display.
+The **30 most recent** records are rendered as a dual-line trend graph at the bottom of the display (indoor = solid, outdoor = dotted).
 
 ---
 
 ## Display Layout
 
+The display is a 400 × 300 px monochrome e-paper panel rendered with GxEPD2 page-buffered drawing and Adafruit GFX (FreeSans) fonts.
+
 ```
-┌────────────────────────────────────────────────────────────────┐  ▲
-│  HH:MM   Mon 22 Feb 2026                          WiFi ✓       │  │ Top bar (24 px)
-├──────────────┬─────────────────────────┬──────────────────────┤  │
-│  INDOOR      │                         │  Wind    12 km/h     │  │
-│  22.5°C      │       -3.1°C            │  Pressure 1013 hPa   │  │ Main panels
-│  Humidity    │        ☁️               │  Rain     20%        │  │ (176 px)
-│  45%         │                         │                      │  │
-├──────────────┴─────────────────────────┴──────────────────────┤  │
-│   Mon              Tue              Wed                        │  │ Forecast row
-│   ⛅  4 / -1  20%  🌧  6 / 0   60%  ☀️  8 / 2  10%          │  │ (58 px)
-├───────────────────────────────────────────────────────────────┤  │
-│  🌅 07:12   🌇 17:48   🌙 Waxing Crescent  ░░▓▓▓░░          │  ▼ Bottom bar (40 px)
-└───────────────────────────────────────────────────────────────┘
-  └──────────── 30-day temperature trend graph overlaid ────────┘
+┌────────────────────────────────────────────────────────────────┐  y=0
+│  22:05       Sun Feb 22                            Online     │  Top bar (22 px)
+├──────────┬──────────────────────────┬─────────────────────────┤  y=22
+│ INDOOR   │                          │  WIND                   │
+│ 22.5°C   │      -4.7°              │  22 km/h                │
+│ 32% RH   │   Partly Cloudy         │─────────────────────────│  Main panels
+│──────────│      ⛅ (48×48 icon)     │  PRESSURE               │  (133 px)
+│          │                          │  1018 hPa               │
+│          │                          │─────────────────────────│
+│          │                          │  HUMIDITY               │
+│          │                          │  74%                    │
+├──────────┴──────────────────────────┴─────────────────────────┤  y=155
+│    TODAY         TMRW          +2 DAY                         │
+│  4 / -1°C     6 / 0°C        8 / 2°C                         │  Forecast (62 px)
+│  Rain 20%     Rain 60%       Rain 10%                         │
+├───────────────────────────────────────────────────────────────┤  y=217
+│  Rise 07:12     Set 17:48     Wax Cresc                       │  Astronomy (20 px)
+├───────────────────────────────────────────────────────────────┤  y=237
+│  30d  IN ───  OUT · · ·   (auto-scaled line graph)            │  Trend graph (63 px)
+└───────────────────────────────────────────────────────────────┘  y=300
 ```
 
-**Panel widths:** Left 110 px · Centre 180 px · Right 110 px  
-**Total resolution:** 400 × 300 px, 1-bit monochrome
+**Panel widths:** Left 100 px · Centre 200 px · Right 100 px
+
+### Fonts
+
+| Zone | Font | Size |
+|------|------|------|
+| Top bar | FreeSansBold | 9 pt |
+| Indoor label | FreeSans | 9 pt |
+| Indoor temp | FreeSansBold | 12 pt |
+| Outdoor temp | FreeSansBold | 18 pt |
+| Weather desc | FreeSans | 9 pt |
+| Right panel labels | FreeSans | 9 pt |
+| Right panel values | FreeSansBold | 9 pt |
+| Forecast day labels | FreeSansBold | 9 pt |
+| Forecast data | FreeSans | 9 pt |
+| Astronomy bar | FreeSans | 9 pt |
+| Trend graph label | Built-in 6×8 | 1× |
+
+### Weather Icons
+
+48 × 48 px icons drawn with Adafruit GFX primitives (circles, lines, rectangles) — no bitmaps. Mapped from WMO weather codes:
+
+| WMO Code | Icon | Description |
+|----------|------|-------------|
+| 0 | Sun | Clear sky |
+| 1–3 | Sun + cloud | Partly cloudy |
+| 45–48 | Dashed lines | Fog |
+| 51–67 | Cloud + drops | Rain |
+| 71–77 | Cloud + flakes | Snow |
+| 80–82 | Outline cloud + drops | Showers |
+| 95–99 | Cloud + bolt | Thunderstorm |
+| Other | Circle + ? | Unknown |
+
+### Moon Phase
+
+Calculated locally from a synodic-period algorithm (reference new moon: 2000-01-06 18:14 UTC). Labels: New, Wax Cresc, 1stQtr, Wax Gibb, Full, Wan Gibb, LastQtr, Wan Cresc.
 
 ---
 
@@ -289,20 +341,37 @@ The 30 most recent records are rendered as a line graph on the display.
 
 ```
 WeatherStation/
-├── platformio.ini              # Build configuration & library dependencies
-├── secrets.h                   # Wi-Fi credentials (not committed)
+├── platformio.ini              # Build config, libs, stack size (16 KB)
+├── secrets.h                   # Wi-Fi credentials (git-ignored)
 ├── README.md                   # This file
+├── ESP32 Weather Station – Product Requirements.md
 └── src/
-    ├── main.cpp                # Wake/sleep orchestration
-    ├── config.h                # Pin assignments, constants, layout geometry
-    ├── data_model.h            # Shared structs (CurrentConditions, ForecastDay, …)
-    ├── wifi_manager/           # Wi-Fi connect/disconnect with timeout
-    ├── ntp_service/            # SNTP sync (once per day via RTC check)
-    ├── openmeteo_client/       # HTTPS GET + ArduinoJson parsing
-    ├── sensor_service/         # DHT11 read with retry logic
-    ├── trend_storage/          # NVS circular buffer (365 records)
-    ├── display_renderer/       # GxEPD2 layout, fonts, icon blitting
-    └── power_manager/          # Deep sleep entry, wake-cause detection
+    ├── main.cpp                # Wake/sleep orchestration, RTC-retained state
+    ├── config.h                # Pins, API URL, layout geometry, NVS keys
+    ├── data_model.h            # Shared structs (CurrentConditions, ForecastDay,
+    │                           #   DailyTrend, SensorReading, WeatherSnapshot)
+    ├── wifi_manager/           # Wi-Fi connect/disconnect with configurable timeout
+    │   ├── wifi_manager.h
+    │   └── wifi_manager.cpp
+    ├── ntp_service/            # SNTP sync (once per calendar day via RTC check)
+    │   ├── ntp_service.h
+    │   └── ntp_service.cpp
+    ├── openmeteo_client/       # HTTPS GET → getString() → ArduinoJson v7 parsing
+    │   ├── openmeteo_client.h  #   Moon phase calculated locally (not from API)
+    │   └── openmeteo_client.cpp
+    ├── sensor_service/         # DHT11 read with retry logic (up to 3 attempts)
+    │   ├── sensor_service.h
+    │   └── sensor_service.cpp
+    ├── trend_storage/          # NVS circular buffer (365 records, daily writes)
+    │   ├── trend_storage.h
+    │   └── trend_storage.cpp
+    ├── display_renderer/       # GxEPD2 page-buffered layout, GFX fonts & icons
+    │   ├── display_renderer.h
+    │   ├── display_renderer.cpp
+    │   └── icon_renderer.h     # 48×48 vector icons drawn via GFX primitives
+    └── power_manager/          # Deep sleep entry
+        ├── power_manager.h
+        └── power_manager.cpp
 ```
 
 ---
@@ -313,11 +382,12 @@ WeatherStation/
 |--------|--------|
 | Wi-Fi connect | < 4 s |
 | API call + parse | < 3 s |
-| Render | < 2 s |
-| Display refresh | < 4 s |
+| Render + refresh | < 4 s |
 | **Total active time** | **≤ 15 s** |
 | Sleep current | ~10 µA (ESP32 deep sleep) |
 | Wake interval | 10 minutes |
+| RAM usage | ~19% (62 KB / 328 KB) |
+| Flash usage | ~49% (953 KB / 1966 KB) |
 
 ---
 
@@ -325,15 +395,28 @@ WeatherStation/
 
 **Provider:** [Open-Meteo](https://open-meteo.com/) — no API key required.
 
-**Endpoint:**
+**Endpoint (configured in `src/config.h`):**
 ```
 https://api.open-meteo.com/v1/forecast
   ?latitude=38.3242&longitude=-85.4725
   &current=temperature_2m,relative_humidity_2m,pressure_msl,wind_speed_10m,weather_code
-  &daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,
-         sunrise,sunset,moonrise,moonset,moon_phase
+  &daily=weather_code,temperature_2m_max,temperature_2m_min,
+         precipitation_probability_max,sunrise,sunset
   &timezone=auto
   &forecast_days=3
 ```
 
-A single request returns current conditions, a 3-day forecast, and astronomical data, minimising Wi-Fi on-time per cycle.
+A single HTTPS request returns current conditions and a 3-day forecast (~3 KB payload), minimising Wi-Fi on-time per cycle. Moon phase is computed locally rather than requested from the API.
+
+---
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `JSON parse error: InvalidInput` | Chunked transfer encoding on HTTPS stream | Fixed: uses `getString()` instead of stream parsing |
+| `stack overflow in task loopTask` | Default 8 KB stack too small for GxEPD2 + fonts | Fixed: stack set to 16 KB in `platformio.ini` |
+| Display renders upside-down | Wrong `setRotation()` value | Set `display.setRotation(0)` for connector-at-top mounting |
+| Text overlapping / 2× scale | Icon renderer leaking `setTextSize(2)` | Fixed: `drawUnknown()` now resets to `setTextSize(1)` |
+| DHT reads `NaN` | Sensor needs 2 s warm-up after power-on | Built-in: 2 s delay on first read, 3 retries |
+| Wi-Fi fails | Weak signal or wrong credentials | Check `secrets.h`; timeout is 20 s (configurable) |
