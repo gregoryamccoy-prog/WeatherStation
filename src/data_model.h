@@ -24,21 +24,11 @@ struct ForecastDay {
     float   maxTemp;         // °C
     int     rainChance;      // %
     uint8_t weatherCode;
-    char    sunrise[6];      // "HH:MM\0"
+    char    sunrise[6];           // "HH:MM\0"
     char    sunset[6];
-    char    moonPhase[16];   // e.g. "waxing_crescent"
+    char    moonPhase[16];        // e.g. "Wax Gibb"
+    float   moonPhaseFraction;    // 0.0 (new) → 0.5 (full) → 1.0 (new)
     bool    valid;
-};
-
-// ---------------------------------------------------------------------------
-// NVS daily trend record  (packed to minimise flash writes)
-// ---------------------------------------------------------------------------
-struct DailyTrend {
-    uint16_t dayIndex;         // days since epoch (wraps ~179 years)
-    float    indoorTemp;
-    float    indoorHumidity;
-    float    outdoorTemp;
-    float    pressure;
 };
 
 // ---------------------------------------------------------------------------
@@ -57,8 +47,6 @@ struct WeatherSnapshot {
     CurrentConditions current;
     ForecastDay       forecast[3];
     SensorReading     indoor;
-    DailyTrend        graph[30];   // last ≤30 records for trend graph
-    uint8_t           graphCount;  // actual populated entries (0–30)
     bool              apiOk;       // false → show offline warning
     time_t            lastUpdate;  // unix timestamp of last successful API call
 };

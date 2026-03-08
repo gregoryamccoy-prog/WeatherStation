@@ -6,6 +6,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <math.h>
 #include <Adafruit_GFX.h>
 
 namespace IconRenderer {
@@ -25,11 +26,13 @@ enum class WeatherIcon {
 // Map WMO weather_code to icon enum
 inline WeatherIcon fromWmoCode(uint8_t code) {
     if (code == 0)                        return WeatherIcon::CLEAR;
-    if (code >= 1  && code <= 3)          return WeatherIcon::PARTLY_CLOUDY;
+    if (code >= 1  && code <= 2)          return WeatherIcon::PARTLY_CLOUDY;
+    if (code == 3)                        return WeatherIcon::CLOUDY;
     if (code >= 45 && code <= 48)         return WeatherIcon::FOG;
     if (code >= 51 && code <= 67)         return WeatherIcon::RAIN;
     if (code >= 71 && code <= 77)         return WeatherIcon::SNOW;
     if (code >= 80 && code <= 82)         return WeatherIcon::SHOWERS;
+    if (code >= 85 && code <= 86)         return WeatherIcon::SNOW;
     if (code >= 95 && code <= 99)         return WeatherIcon::THUNDERSTORM;
     return WeatherIcon::UNKNOWN;
 }
@@ -174,6 +177,52 @@ void drawUnknown(GFX& gfx, int16_t x, int16_t y, uint16_t fg) {
     gfx.print('?');
     // IMPORTANT: restore text size so callers aren't affected
     gfx.setTextSize(1);
+}
+
+// Draw a moon phase disc.
+// cx, cy = centre of disc; r = radius; phase = 0.0 (new) → 0.5 (full) → 1.0 (new)
+// The disc is filled black (dark side), then the illuminated portion is painted white.
+template<typename GFX>
+void drawMoonDisc(GFX& gfx, int16_t cx, int16_t cy, int16_t r, float phase, uint16_t fg) {
+    // fg is expected to be BLACK; bg is white (e-paper default)
+    const uint16_t bg = (fg == 0x0000) ? 0xFFFF : 0x0000;   // infer white from fg
+
+    if (phase <  0.0f) phase = 0.0f;
+    if (phase >= 1.0f) phase = 0.0f;   // 1.0 == new moon == 0.0
+
+    // cos(2π·phase): +1 at new, 0 at quarter, −1 at full, 0 at last quarter
+    const float c = cosf(2.0f * 3.14159265f * phase);
+
+    // Fill entire disc black (dark side), then overwrite illuminated region white
+    for (int16_t dy = -r; dy <= r; dy++) {
+        float hw_f = sqrtf((float)(r * r) - (float)(dy * dy));
+        int16_t hw = (int16_t)hw_f;
+        if (hw == 0) continue;
+
+        // Full disc row in black
+        gfx.drawFastHLine(cx - hw, cy + dy, hw * 2, fg);
+
+        // Illuminated region overwritten in white
+        int16_t x0, x1;
+        if (phase <= 0.5f) {
+            // Waxing: right side lit
+            x0 = cx + (int16_t)(c * hw_f);
+            x1 = cx + hw;
+            if (x0 < cx - hw) x0 = cx - hw;
+        } else {
+            // Waning: left side lit
+            x0 = cx - hw;
+            x1 = cx - (int16_t)(c * hw_f);
+            if (x1 > cx + hw) x1 = cx + hw;
+        }
+
+        if (x1 > x0) {
+            gfx.drawFastHLine(x0, cy + dy, x1 - x0, bg);
+        }
+    }
+
+    // Disc outline in black
+    gfx.drawCircle(cx, cy, r, fg);
 }
 
 // Dispatch: draw icon for a given WMO code

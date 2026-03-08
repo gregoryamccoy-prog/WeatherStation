@@ -17,11 +17,12 @@ namespace OpenMeteoClient {
 
 // ---------------------------------------------------------------------------
 // Moon-phase: compute fraction (0–1) from a unix timestamp, then label it.
-// Reference new moon: 2000-01-06 18:14 UTC (946937640 s)
+// Reference new moon: 2000-01-06 18:14 UTC (947182440 s)
+// Verified: 946684800 (Jan 1 2000 00:00 UTC) + 5×86400 + 18×3600 + 14×60 = 947182440
 // Synodic period: 29.53058770576 days
 // ---------------------------------------------------------------------------
 static float moonPhaseForTime(time_t t) {
-    const double NEW_MOON_REF  = 946937640.0;   // unix seconds
+    const double NEW_MOON_REF  = 947182440.0;   // unix seconds
     const double SYNODIC_DAYS  = 29.53058770576;
     double days  = (static_cast<double>(t) - NEW_MOON_REF) / 86400.0;
     double phase = fmod(days / SYNODIC_DAYS, 1.0);
@@ -140,6 +141,7 @@ bool fetch(CurrentConditions& current, ForecastDay forecast[3]) {
 
         float mp = moonPhaseForTime(now + (time_t)i * 86400);
         moonPhaseLabel(mp, fd.moonPhase, sizeof(fd.moonPhase));
+        fd.moonPhaseFraction = mp;
 
         fd.valid = true;
     }

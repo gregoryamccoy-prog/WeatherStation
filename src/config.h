@@ -60,8 +60,6 @@ static constexpr uint16_t EPD_HEIGHT = 300;
 
 // Layout zones (x, y, w, h)
 static constexpr uint16_t TOPBAR_H          = 24;
-static constexpr uint16_t BOTTOMBAR_Y       = 260;
-static constexpr uint16_t BOTTOMBAR_H       = 40;
 static constexpr uint16_t FORECAST_ROW_Y    = 200;
 static constexpr uint16_t FORECAST_ROW_H    = 58;
 static constexpr uint16_t MAIN_PANEL_H      = FORECAST_ROW_Y - TOPBAR_H;
@@ -71,28 +69,12 @@ static constexpr uint16_t LEFT_PANEL_W      = 110;
 static constexpr uint16_t RIGHT_PANEL_W     = 110;
 static constexpr uint16_t CENTRE_PANEL_W    = EPD_WIDTH - LEFT_PANEL_W - RIGHT_PANEL_W;
 
-// Trend graph area (overlaid on bottom half of left+centre panels, starts below forecast)
-static constexpr uint16_t GRAPH_X           = 0;
-static constexpr uint16_t GRAPH_Y           = BOTTOMBAR_Y;   // shares bottom bar row
-static constexpr uint16_t GRAPH_W           = EPD_WIDTH;
-static constexpr uint16_t GRAPH_H           = BOTTOMBAR_H;
-
 // ---------------------------------------------------------------------------
 // Application constants
 // ---------------------------------------------------------------------------
-static constexpr uint8_t  TREND_MAX_DAYS        = 30;    // days shown in graph
-static constexpr uint16_t TREND_STORAGE_RECORDS = 365;   // NVS circular buffer size
 static constexpr uint8_t  WIFI_CONNECT_TIMEOUT  = 20;    // seconds
 static constexpr uint8_t  DHT_READ_RETRIES      = 3;
 static constexpr uint16_t JSON_DOC_SIZE         = 8192;
-
-// ---------------------------------------------------------------------------
-// NVS namespace / keys
-// ---------------------------------------------------------------------------
-static constexpr char NVS_NS[]          = "wx_station";
-static constexpr char NVS_KEY_HEAD[]    = "tr_head";
-static constexpr char NVS_KEY_COUNT[]   = "tr_count";
-static constexpr char NVS_KEY_DATA[]    = "tr_data";     // blob key
 
 // ---------------------------------------------------------------------------
 // Icon dimensions

@@ -2,7 +2,7 @@
 //
 // Wake sequence:
 //   Power on → WiFi → NTP (once/day) → DHT11 → Open-Meteo API →
-//   Parse → NVS trend write (once/day) → Render → EPD refresh → Deep sleep 10 min
+//   Parse → Render → EPD refresh → Deep sleep 10 min
 
 #include <Arduino.h>
 #include <time.h>
@@ -15,7 +15,6 @@
 #include "ntp_service/ntp_service.h"
 #include "openmeteo_client/openmeteo_client.h"
 #include "sensor_service/sensor_service.h"
-#include "trend_storage/trend_storage.h"
 #include "display_renderer/display_renderer.h"
 #include "power_manager/power_manager.h"
 
@@ -27,7 +26,6 @@ RTC_DATA_ATTR static CurrentConditions rtc_lastCurrent       = {};
 RTC_DATA_ATTR static ForecastDay     rtc_lastForecast[3]     = {};
 RTC_DATA_ATTR static time_t          rtc_lastApiSuccess      = 0;
 RTC_DATA_ATTR static int             rtc_lastNtpDay          = -1;    // day-of-year of last NTP sync
-RTC_DATA_ATTR static int             rtc_lastTrendDay        = -1;    // day-of-year of last NVS write
 RTC_DATA_ATTR static uint32_t        rtc_wakeCount           = 0;
 
 // ---------------------------------------------------------------------------
@@ -64,7 +62,6 @@ void setup() {
         snap.current         = rtc_lastCurrent;
         snap.lastUpdate      = rtc_lastApiSuccess;
         for (int i = 0; i < 3; i++) snap.forecast[i] = rtc_lastForecast[i];
-        TrendStorage::loadRecent(snap.graph, snap.graphCount, TREND_MAX_DAYS);
         DisplayRenderer::render(snap);
         PowerManager::deepSleep(SLEEP_DURATION_US);
         return;
@@ -112,28 +109,12 @@ void setup() {
     }
 
     // -----------------------------------------------------------------------
-    // 5. NVS trend write (once per calendar day)
-    // -----------------------------------------------------------------------
-    NtpService::getTime(timeinfo);   // refresh after API call
-    if (dayOfYear(&timeinfo) != rtc_lastTrendDay && indoor.valid && apiOk) {
-        DailyTrend rec = {};
-        rec.dayIndex       = static_cast<uint16_t>(time(nullptr) / 86400UL);
-        rec.indoorTemp     = indoor.temperature;
-        rec.indoorHumidity = indoor.humidity;
-        rec.outdoorTemp    = current.outdoorTemp;
-        rec.pressure       = current.pressure;
-        TrendStorage::append(rec);
-        rtc_lastTrendDay = dayOfYear(&timeinfo);
-        Serial.printf("[main] Trend record written (dayIndex=%u)\n", rec.dayIndex);
-    }
-
-    // -----------------------------------------------------------------------
-    // 6. Disconnect Wi-Fi (saves ~70 mA during render)
+    // 5. Disconnect Wi-Fi (saves ~70 mA during render)
     // -----------------------------------------------------------------------
     WifiManager::disconnect();
 
     // -----------------------------------------------------------------------
-    // 7. Assemble snapshot and render
+    // 6. Assemble snapshot and render
     // -----------------------------------------------------------------------
     WeatherSnapshot snap = {};
     snap.current     = current;
@@ -141,12 +122,11 @@ void setup() {
     snap.apiOk       = apiOk;
     snap.lastUpdate  = rtc_lastApiSuccess;
     for (int i = 0; i < 3; i++) snap.forecast[i] = forecast[i];
-    TrendStorage::loadRecent(snap.graph, snap.graphCount, TREND_MAX_DAYS);
 
     DisplayRenderer::render(snap);
 
     // -----------------------------------------------------------------------
-    // 8. Deep sleep
+    // 7. Deep sleep
     // -----------------------------------------------------------------------
     Serial.printf("[main] Entering deep sleep for %llu s\n",
                   SLEEP_DURATION_US / 1000000ULL);

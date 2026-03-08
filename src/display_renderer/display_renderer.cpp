@@ -10,8 +10,8 @@
 //          │   Centre (200 w): large outdoor temp + 48×48 weather icon
 //          │   Right (100 w): wind · pressure · rain%
 //   y=155 │ Forecast row (62 px): 3 × (day, mini-icon, max/min, rain%)
-//   y=217 │ Astronomy bar (20 px): sunrise · sunset · moon phase
-//   y=237 │ Trend graph (63 px): indoor + outdoor 30-day line graph
+//   y=217 │ Astronomy bar (20 px): sunrise · sunset
+//   y=237 │ Moon phase panel (63 px): illuminated disc + phase name + % illuminated
 
 #include "display_renderer.h"
 #include "icon_renderer.h"
@@ -68,8 +68,8 @@ static constexpr int16_t FCST_COL_W = EPD_WIDTH / 3;      // 133
 static constexpr int16_t ASTRO_Y    = FCST_Y + FCST_H;    // 217
 static constexpr int16_t ASTRO_H    = 20;
 
-static constexpr int16_t GRAPH_Y2   = ASTRO_Y + ASTRO_H;  // 237
-static constexpr int16_t GRAPH_H2   = EPD_HEIGHT - GRAPH_Y2; // 63
+static constexpr int16_t MOON_Y     = ASTRO_Y + ASTRO_H;  // 237
+static constexpr int16_t MOON_H     = EPD_HEIGHT - MOON_Y; // 63
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -170,35 +170,41 @@ static void drawIndoorPanel(const SensorReading& indoor) {
 }
 
 static void drawCentrePanel(const CurrentConditions& cur) {
-    // Large temperature
-    display.setFont(&FreeSansBold18pt7b);
     display.setTextColor(BLK);
 
+    // Label — mirrors "INDOOR" on left panel
+    display.setFont(&FreeSans9pt7b);
+    printCentred("OUTDOOR", CTR_X, CTR_W, MAIN_Y + 16);
+
+    // Large temperature
+    display.setFont(&FreeSansBold18pt7b);
     char tempBuf[12];
     if (cur.valid) {
         snprintf(tempBuf, sizeof(tempBuf), "%.1f\xB0", cur.outdoorTemp);
     } else {
         strncpy(tempBuf, "--.-\xB0", sizeof(tempBuf));
     }
-    printCentred(tempBuf, CTR_X, CTR_W, MAIN_Y + 34);
+    printCentred(tempBuf, CTR_X, CTR_W, MAIN_Y + 44);
 
-    // Weather description under temp
+    // Current atmospheric condition description
     display.setFont(&FreeSans9pt7b);
     const char* desc = "Unknown";
     uint8_t wc = cur.weatherCode;
     if      (wc == 0)                   desc = "Clear";
-    else if (wc >= 1  && wc <= 3)       desc = "Partly Cloudy";
+    else if (wc >= 1  && wc <= 2)       desc = "Partly Cloudy";
+    else if (wc == 3)                   desc = "Overcast";
     else if (wc >= 45 && wc <= 48)      desc = "Foggy";
     else if (wc >= 51 && wc <= 67)      desc = "Rainy";
     else if (wc >= 71 && wc <= 77)      desc = "Snowy";
     else if (wc >= 80 && wc <= 82)      desc = "Showers";
+    else if (wc >= 85 && wc <= 86)      desc = "Snow Showers";
     else if (wc >= 95 && wc <= 99)      desc = "Thunderstorm";
-    printCentred(desc, CTR_X, CTR_W, MAIN_Y + 52);
+    printCentred(desc, CTR_X, CTR_W, MAIN_Y + 64);
 
-    // Weather icon — 48×48 centred in lower half of centre panel
+    // Weather icon — 48×48 centred, based on current (not forecast) weather code
     IconRenderer::draw(display,
                        CTR_X + (CTR_W - ICON_SIZE) / 2,
-                       MAIN_Y + 60,
+                       MAIN_Y + 72,
                        cur.valid ? cur.weatherCode : 255,
                        BLK);
 
@@ -294,84 +300,46 @@ static void drawAstronomyBar(const ForecastDay forecast[3]) {
         snprintf(buf, sizeof(buf), "Rise %s   Set %s   %s",
                  today.sunrise, today.sunset, today.moonPhase);
     } else {
-        strncpy(buf, "Rise --:--   Set --:--   Moon --", sizeof(buf));
+        strncpy(buf, "Rise --:--   Set --:--   --", sizeof(buf));
     }
     printCentred(buf, 0, EPD_WIDTH, ASTRO_Y + ASTRO_H - 4);
 }
 
-// Integer-only trend graph — draws indoor (solid) and outdoor (dotted) lines
-static void drawTrendGraph(const DailyTrend data[], uint8_t count) {
-    if (count < 2) {
-        display.setFont(&FreeSans9pt7b);
-        display.setTextColor(BLK);
-        printCentred("No trend data yet", 0, EPD_WIDTH, GRAPH_Y2 + GRAPH_H2 / 2 + 6);
-        return;
-    }
+// Moon phase panel — illuminated disc on left, phase name + illumination % on right
+static void drawMoonPanel(const ForecastDay forecast[3]) {
+    hline(MOON_Y);
 
-    // Find temperature range across both indoor and outdoor
-    int16_t tMin = (int16_t)(data[0].indoorTemp * 10);
-    int16_t tMax = tMin;
-    for (uint8_t i = 0; i < count; i++) {
-        int16_t iv = (int16_t)(data[i].indoorTemp  * 10);
-        int16_t ov = (int16_t)(data[i].outdoorTemp * 10);
-        if (iv < tMin) tMin = iv;
-        if (ov < tMin) tMin = ov;
-        if (iv > tMax) tMax = iv;
-        if (ov > tMax) tMax = ov;
-    }
+    const ForecastDay& today = forecast[0];
+    const float phase = today.valid ? today.moonPhaseFraction : 0.0f;
 
-    // Add 5° (×10) headroom; prevent divide-by-zero
-    tMin -= 10;
-    tMax += 10;
-    int16_t tRange = tMax - tMin;
-    if (tRange <= 0) tRange = 1;
+    // Disc: radius 26, centred vertically in the 63 px band
+    const int16_t disc_r  = 26;
+    const int16_t disc_cx = 50;
+    const int16_t disc_cy = MOON_Y + MOON_H / 2;  // 268
+    IconRenderer::drawMoonDisc(display, disc_cx, disc_cy, disc_r, phase, BLK);
 
-    // Graph drawing area (inset 2 px each side)
-    const int16_t gx0  = 4;
-    const int16_t gy0  = GRAPH_Y2 + 2;
-    const int16_t gw   = EPD_WIDTH - 8;
-    const int16_t gh   = GRAPH_H2 - 4;
+    // Text block to the right of the disc
+    const int16_t tx = disc_cx + disc_r + 14;  // x = 90
 
-    // Y-axis label (small font)
-    display.setFont(nullptr);   // built-in 6×8 font
-    display.setTextSize(1);
+    display.setFont(&FreeSansBold9pt7b);
     display.setTextColor(BLK);
-    display.setCursor(gx0, gy0);
-    display.print("30d");
+    display.setCursor(tx, MOON_Y + 16);
+    display.print("MOON PHASE");
 
-    // Column step (fixed-point: x per data point)
-    int32_t stepFp = ((int32_t)gw << 8) / (count - 1);   // Q8 fixed point
+    display.setFont(&FreeSans9pt7b);
+    display.setCursor(tx, MOON_Y + 34);
+    display.print(today.valid ? today.moonPhase : "--");
 
-    auto tempToY = [&](float t) -> int16_t {
-        int16_t tv = (int16_t)(t * 10);
-        // map [tMin..tMax] → [gy0+gh..gy0] (bottom=hot, top=cold — invert)
-        return gy0 + gh - (int16_t)(((int32_t)(tv - tMin) * gh) / tRange);
-    };
-
-    // Plot lines
-    for (uint8_t i = 1; i < count; i++) {
-        int16_t x0 = gx0 + (int16_t)(((int32_t)(i - 1) * stepFp) >> 8);
-        int16_t x1 = gx0 + (int16_t)(((int32_t)i        * stepFp) >> 8);
-
-        // Indoor — solid line (2 px thick)
-        int16_t iy0 = tempToY(data[i - 1].indoorTemp);
-        int16_t iy1 = tempToY(data[i].indoorTemp);
-        display.drawLine(x0, iy0,     x1, iy1,     BLK);
-        display.drawLine(x0, iy0 + 1, x1, iy1 + 1, BLK);
-
-        // Outdoor — dotted (draw every other pixel)
-        int16_t oy0 = tempToY(data[i - 1].outdoorTemp);
-        int16_t oy1 = tempToY(data[i].outdoorTemp);
-        if ((i & 1) == 0) {
-            display.drawLine(x0, oy0, x1, oy1, BLK);
-        }
+    // Illumination percentage: (1 - cos(2π·p)) / 2
+    char illumBuf[20];
+    if (today.valid) {
+        int pct = (int)roundf((1.0f - cosf(2.0f * 3.14159265f * phase)) / 2.0f * 100.0f);
+        snprintf(illumBuf, sizeof(illumBuf), "%d%% illuminated", pct);
+    } else {
+        strncpy(illumBuf, "-- illuminated", sizeof(illumBuf));
     }
-
-    // Legend
-    display.setCursor(gx0 + 20, gy0 + 2);
-    display.print("IN");
-    display.setCursor(gx0 + 20, gy0 + 10);
-    display.print("OUT");
+    display.setCursor(tx, MOON_Y + 52);
+    display.print(illumBuf);
 }
 
 // ---------------------------------------------------------------------------
@@ -401,7 +369,7 @@ void render(const WeatherSnapshot& snap) {
         drawRightPanel(snap.current);
         drawForecastRow(snap.forecast);
         drawAstronomyBar(snap.forecast);
-        drawTrendGraph(snap.graph, snap.graphCount);
+        drawMoonPanel(snap.forecast);
 
         // Offline warning overlay
         if (!snap.apiOk) {
