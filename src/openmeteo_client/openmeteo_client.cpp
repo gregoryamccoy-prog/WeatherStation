@@ -31,14 +31,16 @@ static float moonPhaseForTime(time_t t) {
 }
 
 static void moonPhaseLabel(float phase, char* buf, size_t bufLen) {
-    if      (phase < 0.03f || phase > 0.97f) strncpy(buf, "New",      bufLen);
-    else if (phase < 0.22f)                  strncpy(buf, "Wax Cresc",bufLen);
-    else if (phase < 0.28f)                  strncpy(buf, "1stQtr",   bufLen);
-    else if (phase < 0.47f)                  strncpy(buf, "Wax Gibb", bufLen);
-    else if (phase < 0.53f)                  strncpy(buf, "Full",     bufLen);
-    else if (phase < 0.72f)                  strncpy(buf, "Wan Gibb", bufLen);
-    else if (phase < 0.78f)                  strncpy(buf, "LastQtr",  bufLen);
-    else                                     strncpy(buf, "Wan Cresc",bufLen);
+    // Labels are UTF-8 Japanese stored in the ForecastDay.moonPhase field.
+    // They are rendered via jpDrawString() in display_renderer.cpp.
+    if      (phase < 0.03f || phase > 0.97f) strncpy(buf, u8"新月",     bufLen);
+    else if (phase < 0.22f)                  strncpy(buf, u8"三日月",   bufLen);
+    else if (phase < 0.28f)                  strncpy(buf, u8"上弦",     bufLen);
+    else if (phase < 0.47f)                  strncpy(buf, u8"十三夜",   bufLen);
+    else if (phase < 0.53f)                  strncpy(buf, u8"満月",     bufLen);
+    else if (phase < 0.72f)                  strncpy(buf, u8"居待月",   bufLen);
+    else if (phase < 0.78f)                  strncpy(buf, u8"下弦",     bufLen);
+    else                                     strncpy(buf, u8"有明月",   bufLen);
     buf[bufLen - 1] = '\0';
 }
 

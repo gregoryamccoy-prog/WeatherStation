@@ -15,6 +15,7 @@
 
 #include "display_renderer.h"
 #include "icon_renderer.h"
+#include "jp_text.h"
 #include "../config.h"
 
 #include <Arduino.h>
@@ -111,28 +112,40 @@ static void vline(int16_t x, int16_t y, int16_t h) {
 
 static void drawTopBar(const WeatherSnapshot& snap) {
     struct tm t = {};
-    // Use current wall-clock time for the top bar; fall back to lastUpdate
-    // only if NTP hasn't run yet (time() > some sane threshold).
     time_t now = time(nullptr);
-    if (now < 1000000000L) now = snap.lastUpdate;  // NTP not yet synced
+    if (now < 1000000000L) now = snap.lastUpdate;
     localtime_r(&now, &t);
 
-    char timeBuf[9], dateBuf[20];
-    strftime(timeBuf, sizeof(timeBuf), "%H:%M",      &t);
-    strftime(dateBuf, sizeof(dateBuf), "%a %b %d",   &t);
+    // Time — HH:MM (ASCII)
+    char timeBuf[9];
+    strftime(timeBuf, sizeof(timeBuf), "%H:%M", &t);
+
+    // Date — Japanese: M月D日(曜)
+    // strftime %a gives English; use a JP weekday lookup instead.
+    static const char* JP_DOW[7] = {
+        u8"日", u8"月", u8"火", u8"水", u8"木", u8"金", u8"土"
+    };
+    char dateBuf[32];
+    snprintf(dateBuf, sizeof(dateBuf), "%d\xe6\x9c\x88%d\xe6\x97\xa5(%s)",
+             t.tm_mon + 1, t.tm_mday, JP_DOW[t.tm_wday]);
+    // Note: \xe6\x9c\x88 = 月 (month), \xe6\x97\xa5 = 日 (day) in UTF-8
+
+    // Wi-Fi status — JP, right-aligned
+    const char* wifiStr = snap.apiOk ? u8"オンライン" : u8"オフライン";
+    int16_t wifiW = jpStringWidth(wifiStr);
 
     display.setFont(&FreeSansBold9pt7b);
     display.setTextColor(BLK);
 
-    // Time left
+    // Time — left
     display.setCursor(4, TOPBAR_H2 - 4);
     display.print(timeBuf);
 
-    // Date centre
-    printCentred(dateBuf, 0, EPD_WIDTH, TOPBAR_H2 - 4);
+    // Date — centred using mixed JP/ASCII renderer
+    jpPrintMixedCentred(display, dateBuf, 0, EPD_WIDTH, TOPBAR_H2 - 4, BLK);
 
-    // Wi-Fi / offline status right
-    printRight(snap.apiOk ? "Online" : "Offline", 0, EPD_WIDTH - 3, TOPBAR_H2 - 4);
+    // Wi-Fi — right-aligned
+    jpDrawString(display, wifiStr, EPD_WIDTH - wifiW - 3, TOPBAR_H2 - 4, BLK);
 
     hline(TOPBAR_H2);
 }
@@ -142,8 +155,8 @@ static void drawIndoorPanel(const SensorReading& indoor) {
     display.setFont(&FreeSans9pt7b);
     display.setTextColor(BLK);
 
-    // Label
-    printCentred("INDOOR", LEFT_X, LEFT_W, MAIN_Y + 16);
+    // Label — 室内
+    jpPrintCentred(display, u8"室内", LEFT_X, LEFT_W, MAIN_Y + 16, BLK);
 
     display.setFont(&FreeSansBold12pt7b);
     char buf[12];
@@ -157,9 +170,9 @@ static void drawIndoorPanel(const SensorReading& indoor) {
 
     display.setFont(&FreeSans9pt7b);
     if (indoor.valid) {
-        snprintf(buf, sizeof(buf), "%.0f%% RH", indoor.humidity);
+        snprintf(buf, sizeof(buf), "%.0f%%", indoor.humidity);  // RH unit shown via 湿度 label
     } else {
-        strncpy(buf, "--% RH", sizeof(buf));
+        strncpy(buf, "--%", sizeof(buf));
     }
     printCentred(buf, LEFT_X, LEFT_W, MAIN_Y + 64);
 
@@ -186,20 +199,20 @@ static void drawCentrePanel(const CurrentConditions& cur) {
     }
     printCentred(tempBuf, CTR_X, CTR_W, MAIN_Y + 44);
 
-    // Current atmospheric condition description
+    // Current atmospheric condition description (Japanese)
     display.setFont(&FreeSans9pt7b);
-    const char* desc = "Unknown";
+    const char* desc = u8"不明";
     uint8_t wc = cur.weatherCode;
-    if      (wc == 0)                   desc = "Clear";
-    else if (wc >= 1  && wc <= 2)       desc = "Partly Cloudy";
-    else if (wc == 3)                   desc = "Overcast";
-    else if (wc >= 45 && wc <= 48)      desc = "Foggy";
-    else if (wc >= 51 && wc <= 67)      desc = "Rainy";
-    else if (wc >= 71 && wc <= 77)      desc = "Snowy";
-    else if (wc >= 80 && wc <= 82)      desc = "Showers";
-    else if (wc >= 85 && wc <= 86)      desc = "Snow Showers";
-    else if (wc >= 95 && wc <= 99)      desc = "Thunderstorm";
-    printCentred(desc, CTR_X, CTR_W, MAIN_Y + 64);
+    if      (wc == 0)                   desc = u8"快晴";
+    else if (wc >= 1  && wc <= 2)       desc = u8"晴れ時々曇り";
+    else if (wc == 3)                   desc = u8"曇り";
+    else if (wc >= 45 && wc <= 48)      desc = u8"霧";
+    else if (wc >= 51 && wc <= 67)      desc = u8"雨";
+    else if (wc >= 71 && wc <= 77)      desc = u8"雪";
+    else if (wc >= 80 && wc <= 82)      desc = u8"にわか雨";
+    else if (wc >= 85 && wc <= 86)      desc = u8"にわか雪";
+    else if (wc >= 95 && wc <= 99)      desc = u8"雷雨";
+    jpPrintCentred(display, desc, CTR_X, CTR_W, MAIN_Y + 64, BLK);
 
     // Weather icon — 48×48 centred, based on current (not forecast) weather code
     IconRenderer::draw(display,
@@ -221,8 +234,8 @@ static void drawRightPanel(const CurrentConditions& cur) {
     const int16_t ly = MAIN_Y + 16;
     char buf[16];
 
-    // Wind
-    printCentred("WIND", RIGHT_X, RIGHT_W, ly);
+    // Wind — 風速
+    jpPrintCentred(display, u8"風速", RIGHT_X, RIGHT_W, ly, BLK);
     display.setFont(&FreeSansBold9pt7b);
     if (cur.valid) snprintf(buf, sizeof(buf), "%.0f km/h", cur.windSpeed);
     else strncpy(buf, "-- km/h", sizeof(buf));
@@ -230,9 +243,8 @@ static void drawRightPanel(const CurrentConditions& cur) {
 
     display.drawFastHLine(RIGHT_X + 6, ly + 25, RIGHT_W - 12, BLK);
 
-    // Pressure
-    display.setFont(&FreeSans9pt7b);
-    printCentred("PRESSURE", RIGHT_X, RIGHT_W, ly + 42);
+    // Pressure — 気圧
+    jpPrintCentred(display, u8"気圧", RIGHT_X, RIGHT_W, ly + 42, BLK);
     display.setFont(&FreeSansBold9pt7b);
     if (cur.valid) snprintf(buf, sizeof(buf), "%.0f hPa", cur.pressure);
     else strncpy(buf, "---- hPa", sizeof(buf));
@@ -240,23 +252,27 @@ static void drawRightPanel(const CurrentConditions& cur) {
 
     display.drawFastHLine(RIGHT_X + 6, ly + 63, RIGHT_W - 12, BLK);
 
-    // Humidity (outdoor)
-    display.setFont(&FreeSans9pt7b);
-    printCentred("HUMIDITY", RIGHT_X, RIGHT_W, ly + 78);
+    // Humidity — 湿度
+    jpPrintCentred(display, u8"湿度", RIGHT_X, RIGHT_W, ly + 78, BLK);
     display.setFont(&FreeSansBold9pt7b);
     if (cur.valid) snprintf(buf, sizeof(buf), "%d%%", cur.humidity);
     else strncpy(buf, "--%", sizeof(buf));
     printCentred(buf, RIGHT_X, RIGHT_W, ly + 94);
 }
 
+// Helper: pixel width of an ASCII string using FreeSans9pt7b
+static int16_t asciiWidth(const char* str) {
+    int16_t x1, y1; uint16_t w, h;
+    display.setFont(&FreeSans9pt7b);
+    display.getTextBounds(str, 0, 20, &x1, &y1, &w, &h);
+    return (int16_t)w;
+}
+
 static void drawForecastRow(const ForecastDay forecast[3]) {
     hline(FCST_Y);
 
-    // Day labels  (62 px zone — 48 px icons do NOT fit; use text-only layout)
-    // Line 1 (bold) : day name          — baseline at FCST_Y + 15
-    // Line 2        : max / min         — baseline at FCST_Y + 35
-    // Line 3        : rain probability  — baseline at FCST_Y + 53
-    static const char* DAY_LABELS[3] = { "TODAY", "TMRW", "+2 DAY" };
+    // Day labels — 今日 / 明日 / 明後日
+    static const char* DAY_LABELS[3] = { u8"今日", u8"明日", u8"明後日" };
 
     for (int i = 0; i < 3; i++) {
         int16_t fx = i * FCST_COL_W;
@@ -264,10 +280,9 @@ static void drawForecastRow(const ForecastDay forecast[3]) {
 
         if (i > 0) vline(fx, FCST_Y, FCST_H);
 
-        // Day label — bold
-        display.setFont(&FreeSansBold9pt7b);
+        // Day label — JP font (bold weight approximated with regular at this size)
         display.setTextColor(BLK);
-        printCentred(DAY_LABELS[i], fx, FCST_COL_W, FCST_Y + 15);
+        jpPrintCentred(display, DAY_LABELS[i], fx, FCST_COL_W, FCST_Y + 15, BLK);
 
         char buf[20];
 
@@ -280,10 +295,20 @@ static void drawForecastRow(const ForecastDay forecast[3]) {
         }
         printCentred(buf, fx, FCST_COL_W, FCST_Y + 35);
 
-        // Rain chance
-        if (f.valid) snprintf(buf, sizeof(buf), "Rain %d%%", f.rainChance);
-        else         strncpy(buf, "Rain --%", sizeof(buf));
-        printCentred(buf, fx, FCST_COL_W, FCST_Y + 53);
+        // Rain chance — 降水 XX%
+        // Render JP label + ASCII number in one line
+        {
+            const char* label = u8"降水 ";
+            char pctBuf[8];
+            if (f.valid) snprintf(pctBuf, sizeof(pctBuf), "%d%%", f.rainChance);
+            else         strncpy(pctBuf, "--%", sizeof(pctBuf));
+            int16_t tw = jpStringWidth(label) + asciiWidth(pctBuf);
+            int16_t rx = fx + (FCST_COL_W - tw) / 2;
+            rx = jpDrawString(display, label, rx, FCST_Y + 53, BLK);
+            display.setFont(&FreeSans9pt7b);
+            display.setCursor(rx, FCST_Y + 53);
+            display.print(pctBuf);
+        }
     }
     hline(FCST_Y + FCST_H);
 }
@@ -294,15 +319,35 @@ static void drawAstronomyBar(const ForecastDay forecast[3]) {
     display.setFont(&FreeSans9pt7b);
     display.setTextColor(BLK);
 
-    char buf[64];
+    // Mixed JP + ASCII layout:
+    // 「日の出」HH:MM   「日の入り」HH:MM   <moon phase>
     const ForecastDay& today = forecast[0];
+    char rise[8], sset[8];
     if (today.valid) {
-        snprintf(buf, sizeof(buf), "Rise %s   Set %s   %s",
-                 today.sunrise, today.sunset, today.moonPhase);
+        snprintf(rise, sizeof(rise), " %s   ", today.sunrise);
+        snprintf(sset, sizeof(sset), " %s   ", today.sunset);
     } else {
-        strncpy(buf, "Rise --:--   Set --:--   --", sizeof(buf));
+        strncpy(rise, " --:--   ", sizeof(rise));
+        strncpy(sset, " --:--   ", sizeof(sset));
     }
-    printCentred(buf, 0, EPD_WIDTH, ASTRO_Y + ASTRO_H - 4);
+    // Compute total width for centering
+    int16_t totalW = jpStringWidth(u8"日の出") + asciiWidth(rise)
+                   + jpStringWidth(u8"日の入り") + asciiWidth(sset)
+                   + jpStringWidth(today.valid ? today.moonPhase : "--");
+    int16_t x  = (EPD_WIDTH - totalW) / 2;
+    int16_t bl = ASTRO_Y + ASTRO_H - 4;   // baseline
+
+    x = jpDrawString(display, u8"日の出", x, bl, BLK);
+    display.setFont(&FreeSans9pt7b); display.setTextColor(BLK);
+    display.setCursor(x, bl); display.print(rise);
+    x += asciiWidth(rise);
+
+    x = jpDrawString(display, u8"日の入り", x, bl, BLK);
+    display.setFont(&FreeSans9pt7b); display.setTextColor(BLK);
+    display.setCursor(x, bl); display.print(sset);
+    x += asciiWidth(sset);
+
+    jpDrawString(display, today.valid ? today.moonPhase : u8"--", x, bl, BLK);
 }
 
 // Moon phase panel — illuminated disc on left, phase name + illumination % on right
@@ -324,22 +369,25 @@ static void drawMoonPanel(const ForecastDay forecast[3]) {
     display.setFont(&FreeSansBold9pt7b);
     display.setTextColor(BLK);
     display.setCursor(tx, MOON_Y + 16);
-    display.print("MOON PHASE");
+    display.print("MOON ");   // keep ASCII for layout anchor
+    jpDrawString(display, u8"月相", display.getCursorX(), MOON_Y + 16, BLK);
 
     display.setFont(&FreeSans9pt7b);
     display.setCursor(tx, MOON_Y + 34);
-    display.print(today.valid ? today.moonPhase : "--");
+    display.print(today.valid ? today.moonPhase : u8"--");
 
-    // Illumination percentage: (1 - cos(2π·p)) / 2
+    // Illumination: XX% 照射
     char illumBuf[20];
     if (today.valid) {
         int pct = (int)roundf((1.0f - cosf(2.0f * 3.14159265f * phase)) / 2.0f * 100.0f);
-        snprintf(illumBuf, sizeof(illumBuf), "%d%% illuminated", pct);
+        snprintf(illumBuf, sizeof(illumBuf), "%d%% ", pct);
     } else {
-        strncpy(illumBuf, "-- illuminated", sizeof(illumBuf));
+        strncpy(illumBuf, "--% ", sizeof(illumBuf));
     }
+    display.setFont(&FreeSans9pt7b);
     display.setCursor(tx, MOON_Y + 52);
     display.print(illumBuf);
+    jpDrawString(display, u8"照射", display.getCursorX(), MOON_Y + 52, BLK);
 }
 
 // ---------------------------------------------------------------------------
@@ -375,7 +423,12 @@ void render(const WeatherSnapshot& snap) {
         if (!snap.apiOk) {
             display.setFont(&FreeSansBold9pt7b);
             display.setTextColor(BLK);
-            printCentred("! Offline – cached data", 0, EPD_WIDTH, 12);
+            // "! " in ASCII then オフライン in JP
+            int16_t tw = asciiWidth("! ") + jpStringWidth(u8"オフライン");
+            int16_t x  = (EPD_WIDTH - tw) / 2;
+            display.setCursor(x, 12);
+            display.print("! ");
+            jpDrawString(display, u8"オフライン", display.getCursorX(), 12, BLK);
         }
 
     } while (display.nextPage());
